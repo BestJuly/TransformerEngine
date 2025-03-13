@@ -23,12 +23,6 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def debug_print(msg):
-    return
-    # debug mode
-    if torch.distributed.get_rank() == 0:
-        print(msg)
-
 class multi_module_model(torch.nn.Module):
     def __init__(self, module, num_layers, *args, **kwargs):
         super().__init__()
@@ -37,12 +31,11 @@ class multi_module_model(torch.nn.Module):
         
     def forward(self, x):
         consistent_shape = x.shape
-        debug_print(f"consistent_shape: {consistent_shape}")
         for layer in self.layers:
             x = layer(x)
             # For stacked layers, we need to reshape the output to the consistent shape
-            x = x.reshape(consistent_shape)
-        debug_print(f"output_shape: {x.shape}")
+            if self.num_layers > 1:
+                x = x.reshape(consistent_shape)
         return x
 
 
