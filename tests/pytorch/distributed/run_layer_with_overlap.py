@@ -23,6 +23,29 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+def debug_print(msg):
+    return
+    # debug mode
+    if torch.distributed.get_rank() == 0:
+        print(msg)
+
+class multi_module_model(torch.nn.Module):
+    def __init__(self, module, num_layers, *args, **kwargs):
+        super().__init__()
+        self.num_layers = num_layers
+        self.layers = torch.nn.ModuleList([module(*args, **kwargs) for _ in range(num_layers)])
+        
+    def forward(self, x):
+        consistent_shape = x.shape
+        debug_print(f"consistent_shape: {consistent_shape}")
+        for layer in self.layers:
+            x = layer(x)
+            # For stacked layers, we need to reshape the output to the consistent shape
+            x = x.reshape(consistent_shape)
+        debug_print(f"output_shape: {x.shape}")
+        return x
+
+
 def _te_layer_argtype(name):
     te_layers = [
         te.Linear,
@@ -39,17 +62,21 @@ def _te_layer_argtype(name):
     return layer_map[name.lower()]
 
 
-def _get_layer_args(config, tp_group, tp_size, reference=False):
+def _get_layer_args(config, tp_group, tp_size, num_layers, reference=False):
     hidden_size = config.num_heads * config.head_dim
     ffn_hidden_size = 4 * hidden_size
     qkv_size = 3 * hidden_size
+    # Shape is fine if using TransformerLayer for stacked layers
+    # For other layer modules, we need to reshape the input to the consistent shape
+    if num_layers > 1 and config.layer_type != te.TransformerLayer:
+        qkv_size = ffn_hidden_size = hidden_size
     input_shape = [config.seq_length, config.batch_size, hidden_size]
     args = [hidden_size]
     kwargs = {
         "params_dtype": torch.float32,
         "device": "cuda",
         "tp_group": tp_group,
-        "tp_size": tp_size,
+        "tp_size": tp_size, # 2
         "sequence_parallel": True,
         "ub_overlap_ag": not reference,
         "ub_overlap_rs": not reference,
@@ -57,8 +84,8 @@ def _get_layer_args(config, tp_group, tp_size, reference=False):
 
     if config.layer_type in [te.Linear, te.LayerNormLinear]:
         if config.linear_parallel_mode == "row":
-            input_shape[-1] = ffn_hidden_size // tp_size
-            args = [ffn_hidden_size, hidden_size]
+            input_shape[-1] = ffn_hidden_size // tp_size # 1024, [1024, 1, 1024]
+            args = [ffn_hidden_size, hidden_size] # [2048, 512] is weight, will be divided by tp_size in Linear init.
             kwargs["ub_name"] = "proj" if config.layer_type == te.Linear else "fc2"
         elif config.linear_parallel_mode == "column":
             input_shape[0] = config.seq_length // tp_size
@@ -95,6 +122,12 @@ def _parse_args(argv=None, namespace=None):
         description="Test a Transformer Engine layer with GEMM+comm overlap via Userbuffers."
     )
     parser.add_argument("-l", "--layer-type", type=_te_layer_argtype, default=te.LayerNormMLP)
+    parser.add_argument(
+        "--num-layers", 
+        type=int, 
+        default=1, 
+        help="Number of identical layers to stack."
+    )
     parser.add_argument("-b", "--batch-size", type=int, default=2, help="Input batch size.")
     parser.add_argument("-s", "--seq-length", type=int, default=1024, help="Input sequence length.")
     parser.add_argument(
@@ -280,9 +313,9 @@ def _train(opts):
     )
 
     # Initialize the Transformer Engine layer with overlap
-    args, kwargs, input_shape = _get_layer_args(opts, nccl_world, WORLD_SIZE)
+    args, kwargs, input_shape = _get_layer_args(opts, nccl_world, WORLD_SIZE, num_layers=opts.num_layers)
     with te.fp8_model_init(enabled=opts.fp8_init):
-        test_model = opts.layer_type(*args, **kwargs)
+        test_model = multi_module_model(opts.layer_type, opts.num_layers, *args, **kwargs)
     dist_print("Initialized test model...", debug=True)
     if WORLD_RANK == 0:
         pprint.pprint(kwargs)
@@ -290,9 +323,10 @@ def _train(opts):
     dist.barrier()
 
     # Initialize the reference model and copy all parameters
-    ref_args, ref_kwargs, _ = _get_layer_args(opts, nccl_world, WORLD_SIZE, reference=True)
+    print("*"*100)
+    ref_args, ref_kwargs, _ = _get_layer_args(opts, nccl_world, WORLD_SIZE, num_layers=opts.num_layers, reference=True)
     with te.fp8_model_init(enabled=opts.fp8_init):
-        ref_model = opts.layer_type(*ref_args, **ref_kwargs)
+        ref_model = multi_module_model(opts.layer_type, opts.num_layers, *args, **kwargs)
     dist_print("Initialized reference model...", debug=True)
     for test_param, ref_param in zip(test_model.parameters(), ref_model.parameters()):
         with torch.no_grad():
@@ -324,6 +358,7 @@ def _train(opts):
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             with te.fp8_autocast(enabled=opts.fp8, fp8_recipe=fp8_recipe, fp8_group=nccl_world):
                 y = model(x)
+                debug_print(f"x.shape: {x.shape}, y.shape: {y.shape}")
                 if isinstance(y, tuple):
                     out, *_ = y
                 else:

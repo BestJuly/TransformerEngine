@@ -65,6 +65,13 @@ from ..cpp_extensions import (
 __all__ = ["LayerNormLinear"]
 
 
+def print_rank0(msg):
+    #return
+    # debug mode
+    if torch.distributed.get_rank() == 0:
+        print(msg)
+
+
 class _LayerNormLinear(torch.autograd.Function):
     """LayerNormLinear semi-top level module
     Calls custom cuda extensions.
@@ -200,6 +207,7 @@ class _LayerNormLinear(torch.autograd.Function):
                 inputmat, dtype=inputmat.dtype, memory_format=torch.contiguous_format, device="cuda"
             )
 
+        print_rank0(f"LayerNormLinear forward line 208, ln_out id={id(ln_out)}")
         # Apply normalization
         nvtx_range_push(f"{nvtx_label}.norm")
         ln_out, mu, rsigma = apply_normalization(
@@ -216,14 +224,18 @@ class _LayerNormLinear(torch.autograd.Function):
         )
         ln_out_return = ln_out if return_layernorm_output else None
         nvtx_range_pop(f"{nvtx_label}.norm")
+        print_rank0(f"LayerNormLinear forward line 210, ln_out id={id(ln_out)}")
 
         # For Float8CurrentScalingQuantizer, layernorm/rmsnorm has not been fused with quantizer.
         # So the output of normalization is in high precision, and we need to quantize it to FP8 and put in the buffer.
         if ub_overlap_ag_fprop and isinstance(input_quantizer, Float8CurrentScalingQuantizer):
             ub_obj_fprop = get_ub(ub_name + "_fprop")
             ln_out_local = ln_out
+            print_rank0(f"LayerNormLinear forward line 225, ln_out_local id={id(ln_out_local)}")
             ln_out = ub_obj_fprop.get_buffer(input_quantizer, local_chunk=True)
+            print_rank0(f"LayerNormLinear forward line 225, ln_out id={id(ln_out)}")
             input_quantizer.quantize(ln_out_local, out=ln_out)
+            print_rank0(f"LayerNormLinear forward line 227, ln_out id={id(ln_out)}")
 
         # Prepare GEMM input
         # Note: Cast to expected dtype and perform tensor-parallel communication
@@ -379,6 +391,7 @@ class _LayerNormLinear(torch.autograd.Function):
                 mu,
                 rsigma,
             )
+            print_rank0(f"ln_out to_save {id(ln_out)}")
             ctx.save_for_backward(*tensors_to_save)
             ctx.tensor_objects = tensor_objects
             ctx.requires_dgrad = inp.requires_grad
@@ -485,6 +498,7 @@ class _LayerNormLinear(torch.autograd.Function):
                 mu,
                 rsigma,
             ) = restore_from_saved(ctx.tensor_objects, saved_tensors)
+            print_rank0(f"ln_out to_restore {id(ln_out)}")
             # Delete the references to tensor objects once they've been consumed
             # by the `restore_from_saved` method to construct back the actual tensors.
             ctx.tensor_objects = None
