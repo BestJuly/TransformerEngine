@@ -37,7 +37,6 @@ from ..tensor import QuantizedTensor, Quantizer
 from ..tensor.float8_blockwise_tensor import Float8BlockQuantizer
 from ..tensor._internal.float8_tensor_base import Float8TensorBase
 from ..tensor._internal.mxfp8_tensor_base import MXFP8TensorBase
-from ..tensor.float8_tensor import Float8CurrentScalingQuantizer
 from ..tensor._internal.float8_blockwise_tensor_base import Float8BlockwiseQTensorBase
 
 __all__ = ["initialize_ub", "destroy_ub"]
@@ -880,9 +879,6 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                 (QuantizedTensor, Float8TensorBase, MXFP8TensorBase, Float8BlockwiseQTensorBase),
             ):
                 grad_bias = grad_output.dequantize().view(-1, grad_output.shape[-1]).sum(dim=0)
-            elif isinstance(quantizer, Float8CurrentScalingQuantizer):
-                # FP8 current scaling does not support fused cast + dbias
-                grad_bias = grad_output.view(-1, grad_output.shape[-1]).sum(dim=0)
             else:
                 if isinstance(quantizer, Float8BlockQuantizer):
                     # unfuse bgrad for now until cast_transpose + dgrad calculation is ready for Float8BlockQuantizer.

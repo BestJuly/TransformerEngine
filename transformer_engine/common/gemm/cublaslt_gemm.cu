@@ -322,8 +322,7 @@ void cublas_gemm(const Tensor *inputA, const Tensor *inputB, Tensor *outputD,
     cublasLtMatmulMatrixScale_t scaling_mode_a;
     cublasLtMatmulMatrixScale_t scaling_mode_b;
 #endif
-    if ((is_delayed_tensor_scaling(inputA->scaling_mode) &&
-         is_delayed_tensor_scaling(inputB->scaling_mode))) {
+    if ((is_tensor_scaling(inputA->scaling_mode) && is_tensor_scaling(inputB->scaling_mode))) {
       void *A_scale_inverse = param.A_scale_inv;
       void *B_scale_inverse = param.B_scale_inv;
       NVTE_CHECK_CUBLAS(cublasLtMatmulDescSetAttribute(operationDesc,

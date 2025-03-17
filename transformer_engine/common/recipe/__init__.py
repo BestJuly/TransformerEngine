@@ -80,6 +80,10 @@ class Recipe:
     def fp8blockwise(self):
         """Whether the given recipe is float8 blockwise scaling."""
         return isinstance(self, Float8BlockScaling)
+    
+    def float8_per_tensor_scaling(self):
+        """Whether the given recipe is per-tensor scaling."""
+        return isinstance(self, (DelayedScaling, Float8CurrentScaling))
 
 
 @dataclass()
