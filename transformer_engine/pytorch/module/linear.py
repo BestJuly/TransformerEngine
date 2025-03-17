@@ -14,7 +14,7 @@ import transformer_engine_torch as tex
 from transformer_engine.common.recipe import Recipe
 from .base import (
     get_workspace,
-    get_ub,
+    get_ub_with_precision,
     TransformerEngineBaseModule,
     _2X_ACC_FPROP,
     _2X_ACC_DGRAD,
@@ -224,13 +224,13 @@ class _Linear(torch.autograd.Function):
         rs_out = None
         out_dtype = activation_dtype
         if ub_overlap_rs_fprop:
-            ub_obj = get_ub(ub_name + "_fprop")
+            ub_obj = get_ub_with_precision(ub_name + "_fprop", fp8=fp8)
             ub_type = tex.CommOverlapType.RS
             out_shape = [reduce(multiply_op, inp_shape[:-1]) // tp_world_size, out_features]
             rs_out = torch.empty(out_shape, dtype=activation_dtype, device=inputmat_total.device)
 
         elif ub_overlap_ag_fprop:
-            ub_obj = get_ub(ub_name + "_fprop")
+            ub_obj = get_ub_with_precision(ub_name + "_fprop", fp8=fp8)
             ub_type = tex.CommOverlapType.AG
             if fp8:
                 assert ub_obj.is_fp8_ubuf(), "AG overlap with FP8 GEMM inputs requires FP8 buffer."
@@ -418,13 +418,13 @@ class _Linear(torch.autograd.Function):
             dgrad_bulk = None
             if ctx.ub_overlap_ag:
                 # Overlap grad_output all-gather with dgrad compute
-                ctx.ub_obj_gradout = get_ub(ctx.ub_name + "_dgrad")
+                ctx.ub_obj_gradout = get_ub_with_precision(ctx.ub_name + "_dgrad", fp8=ctx.fp8)
                 ub_obj_dgrad = ctx.ub_obj_gradout
                 ub_type_dgrad = tex.CommOverlapType.AG
 
             elif ctx.ub_overlap_rs_dgrad:
                 # Overlap dgrad reduce-scatter with dgrad compute
-                ctx.ub_obj_gradout = get_ub(ctx.ub_name + "_dgrad")
+                ctx.ub_obj_gradout = get_ub_with_precision(ctx.ub_name + "_dgrad", fp8=ctx.fp8)
                 ub_obj_dgrad = ctx.ub_obj_gradout
                 ub_type_dgrad = tex.CommOverlapType.RS
                 rs_out = torch.empty(
@@ -438,14 +438,14 @@ class _Linear(torch.autograd.Function):
                     #       and will copy columnwise data if rowwise does not exist. In that case,
                     #       the all-gather will apply to the leading dimension of the transpose,
                     #       which then needs to be interleaved correctly before WGRAD.
-                    ctx.ub_obj_gradout = get_ub(ctx.ub_name + "_dgrad")
+                    ctx.ub_obj_gradout = get_ub_with_precision(ctx.ub_name + "_dgrad", fp8=ctx.fp8)
                     ub_obj_dgrad = ctx.ub_obj_gradout
                     ub_type_dgrad = tex.CommOverlapType.AG
                     ub_obj_dgrad.copy_into_buffer(inputmat, ctx.input_quantizer, local_chunk=True)
 
                 if ctx.ub_bulk_wgrad:
                     # Overlap dgrad reduce-scatter with wgrad compute
-                    ub_obj_wgrad = get_ub(ctx.ub_name + "_wgrad")
+                    ub_obj_wgrad = get_ub_with_precision(ctx.ub_name + "_wgrad", fp8=ctx.fp8)
                     ub_type_wgrad = tex.CommOverlapType.RS
                     ub_obj_wgrad.set_buffer_params(ctx.grad_input_quantizer)
                     dgrad_bulk = ub_obj_wgrad.get_buffer(ctx.grad_input_quantizer)

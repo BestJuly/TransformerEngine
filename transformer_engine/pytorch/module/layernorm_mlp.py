@@ -19,7 +19,7 @@ from transformer_engine.common.recipe import Recipe
 from .base import (
     get_workspace,
     _ub_communicators,
-    get_ub,
+    get_ub_with_precision,
     TransformerEngineBaseModule,
     _2X_ACC_FPROP,
     _2X_ACC_DGRAD,
@@ -250,7 +250,7 @@ class _LayerNormMLP(torch.autograd.Function):
         # For DelayScaling, output of normalization will be in fp8.
         # For Float8CurrentScaling, we want the output of normalization in high precision, then quantize to fp8.
         if ub_overlap_ag and not isinstance(fc1_input_quantizer, Float8CurrentScalingQuantizer):
-            ub_obj_lnout = get_ub("fc1_fprop")
+            ub_obj_lnout = get_ub_with_precision("fc1_fprop", fp8=fp8)
             ln_out = ub_obj_lnout.get_buffer(fc1_input_quantizer, local_chunk=True)
         elif not with_quantized_norm:
             ln_out = torch.empty_like(
@@ -276,7 +276,7 @@ class _LayerNormMLP(torch.autograd.Function):
         # For Float8CurrentScalingQuantizer, layernorm/rmsnorm has not been fused with quantizer.
         # So the output of normalization is in high precision, and we need to quantize it to FP8 and put in the buffer.
         if ub_overlap_ag and isinstance(fc1_input_quantizer, Float8CurrentScalingQuantizer):
-            ub_obj_lnout = get_ub("fc1_fprop")
+            ub_obj_lnout = get_ub_with_precision("fc1_fprop", fp8=fp8)
             ln_out_local = ln_out
             ln_out = ub_obj_lnout.get_buffer(fc1_input_quantizer, local_chunk=True)
             fc1_input_quantizer.quantize(ln_out_local, out=ln_out)
@@ -425,7 +425,7 @@ class _LayerNormMLP(torch.autograd.Function):
         rs_out = None
         fc2_out = None
         if ub_overlap_rs:
-            ub_obj_fc2out = get_ub("fc2_fprop")
+            ub_obj_fc2out = get_ub_with_precision("fc2_fprop", fp8=fp8)
             dim_size = list(act_out.size())
             dim_size[0] = dim_size[0] // tp_world_size
             dim_size[1] = fc2_weight.size(0)
@@ -685,7 +685,7 @@ class _LayerNormMLP(torch.autograd.Function):
 
             ub_obj_fc2_dgrad = None
             if ctx.ub_overlap_ag:
-                ub_obj_fc2_dgrad = get_ub("fc2_dgrad")
+                ub_obj_fc2_dgrad = get_ub_with_precision("fc2_dgrad", fp8=ctx.fp8)
             ctx.ub_obj_gradout = ub_obj_fc2_dgrad
             (
                 grad_output,
@@ -839,7 +839,7 @@ class _LayerNormMLP(torch.autograd.Function):
             fc1_dgrad_bulk = None
             if ctx.ub_overlap_rs_dgrad:
                 # Overlap DGRAD+RS
-                ub_obj_fc1_dgrad = get_ub("fc1_dgrad")
+                ub_obj_fc1_dgrad = get_ub_with_precision("fc1_dgrad", fp8=ctx.fp8)
                 ub_type_fc1_dgrad = tex.CommOverlapType.RS
                 fc1_dgrad_rs_out = torch.empty(
                     fc1_dgrad_shape, dtype=ctx.activation_dtype, device="cuda"
@@ -852,7 +852,7 @@ class _LayerNormMLP(torch.autograd.Function):
                     #       and will copy columnwise data if rowwise does not exist. In that case,
                     #       the all-gather will apply to the leading dimension of the transpose,
                     #       which then needs to be interleaved correctly before WGRAD.
-                    ub_obj_fc1_dgrad = get_ub("fc1_dgrad")
+                    ub_obj_fc1_dgrad = get_ub_with_precision("fc1_dgrad", fp8=ctx.fp8)
                     ub_type_fc1_dgrad = tex.CommOverlapType.AG
                     ub_obj_fc1_dgrad.copy_into_buffer(
                         ln_out, ctx.fc1_input_quantizer, local_chunk=True
@@ -860,7 +860,7 @@ class _LayerNormMLP(torch.autograd.Function):
 
                 if ctx.ub_bulk_wgrad:
                     # Overlap FC1 DGRAD reduce-scatter with WGRAD compute
-                    ub_obj_fc1_wgrad = get_ub("fc1_wgrad")
+                    ub_obj_fc1_wgrad = get_ub_with_precision("fc1_wgrad", fp8=ctx.fp8)
                     fc1_dgrad_bulk = ub_obj_fc1_wgrad.get_buffer(None)
 
             # FC1 DGRAD: Unconditional
@@ -1236,7 +1236,7 @@ class LayerNormMLP(TransformerEngineBaseModule):
         self.gemm_gelu_fusion = (
             bool(int(os.getenv("NVTE_GEMM_GELU_FUSION", "0")))
             and self.activation == "gelu"
-            and ((_ub_communicators is None) or (not get_ub("fc1_fprop").is_atomic_gemm()))
+            and ((_ub_communicators is None) or (not get_ub_with_precision("fc1_fprop", fp8=self.fp8).is_atomic_gemm()))
         )
 
         if tp_group is None:

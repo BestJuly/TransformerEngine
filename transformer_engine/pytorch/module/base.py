@@ -368,7 +368,19 @@ def initialize_ub(
             )
             ub_cfg.update(ub_cfgs[name])
             ub_cfg["fp8_buf"] = fp8_buf
-        add_ub(name, **ub_cfg)
+        
+        # Add support for mixed precision userbuffers.
+        # This is a workaround that we allocate both fp8 & bf16 userbuffers.
+        mixed_precision_ub = os.get_env("NVTE_MIXED_PRECISION_UB", "0")
+        if mixed_precision_ub == "0":
+            add_ub(name, **ub_cfg)
+        else:
+            # add fp8 userbuffers.
+            ub_cfg["fp8_buf"] = True
+            add_ub(name + "_fp8", **ub_cfg)
+            # add bf16 userbuffers.
+            ub_cfg["fp8_buf"] = False
+            add_ub(name + "_bf16", **ub_cfg)
 
 
 def get_ub(name: str):
@@ -376,6 +388,15 @@ def get_ub(name: str):
     assert _ub_communicators is not None, "UB manager is not initialized."
     assert name in _ub_communicators, f"UB for {name} is not registered."
     return _ub_communicators[name]
+
+
+def get_ub_with_precision(name: str, fp8=False):
+    """Get userbuffer communicator corresponding to give key."""
+    mixed_precision_ub = os.get_env("NVTE_MIXED_PRECISION_UB", "0")
+    if mixed_precision_ub == "0":
+        return get_ub(name)
+    else:
+        return get_ub(name + "_fp8" if fp8 else name + "_bf16")
 
 
 def destroy_ub():
