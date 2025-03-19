@@ -47,6 +47,7 @@ _ub_communicators = None
 _NUM_MAX_UB_STREAMS = 3
 _MIN_STREAM_PRIORITY, _MAX_STREAM_PRIORITY = None, None
 layers_atomic_ring_exchange = []
+_PRECISION_AWARE_UB = os.getenv("NVTE_PRECISION_AWARE_UB", "0")
 
 
 def get_cublas_workspace_size_bytes() -> None:
@@ -371,12 +372,10 @@ def initialize_ub(
         
         # Add support for mixed precision userbuffers.
         # This is a workaround that we allocate both fp8 & bf16 userbuffers.
-        mixed_precision_ub = os.get_env("NVTE_MIXED_PRECISION_UB", "0")
-        if mixed_precision_ub == "0":
+        if _PRECISION_AWARE_UB == "0":
             add_ub(name, **ub_cfg)
         else:
             # add fp8 userbuffers.
-            ub_cfg["fp8_buf"] = True
             add_ub(name + "_fp8", **ub_cfg)
             # add bf16 userbuffers.
             ub_cfg["fp8_buf"] = False
@@ -392,8 +391,7 @@ def get_ub(name: str):
 
 def get_ub_with_precision(name: str, fp8=False):
     """Get userbuffer communicator corresponding to give key."""
-    mixed_precision_ub = os.get_env("NVTE_MIXED_PRECISION_UB", "0")
-    if mixed_precision_ub == "0":
+    if _PRECISION_AWARE_UB == "0":
         return get_ub(name)
     else:
         return get_ub(name + "_fp8" if fp8 else name + "_bf16")
