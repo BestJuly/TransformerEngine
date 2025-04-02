@@ -10,8 +10,7 @@
 namespace transformer_engine {
 
 __device__ __forceinline__ float compute_scale_from_amax(float amax, float max_fp8,
-                                                         bool force_pow_2_scales, float epsilon,
-                                                         float value_for_inf) {
+                                                         bool force_pow_2_scales, float epsilon) {
   // NOTE: NAN amax evaluates false for <, handled further down.
   if (amax < epsilon) {
     amax = epsilon;
@@ -32,7 +31,8 @@ __device__ __forceinline__ float compute_scale_from_amax(float amax, float max_f
   // the scale is not representable in FP32.
   if (isinf(scale)) {
     // use fp32 max to represent the scale
-    scale = inf_value;
+    // scale = inf_value; // error for this
+    scale = std::numeric_limits<float>::max();
   }
   if (force_pow_2_scales) {
     uint32_t scale_bits = *reinterpret_cast<uint32_t *>(&scale);

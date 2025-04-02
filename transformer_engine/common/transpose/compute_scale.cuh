@@ -90,8 +90,9 @@ struct HighPrecisionFloatScaleLimitsTrait<half, true> {
 template <typename IType, typename OType, bool Power2Scaling>
 __device__ __forceinline__ float ComputeScale(const float amax, const float eps) {
   constexpr float fp8_max = F8LimitsTrait<OType>::max;
-  constexpr float value_for_inf = HighPrecisionFloatScaleLimitsTrait<IType, Power2Scaling>::max;
-  return compute_scale_from_amax(amax, fp8_max, Power2Scaling, eps, value_for_inf);
+  //constexpr float value_for_inf = HighPrecisionFloatScaleLimitsTrait<IType, Power2Scaling>::max;
+  //return compute_scale_from_amax(amax, fp8_max, Power2Scaling, eps, value_for_inf);
+  return compute_scale_from_amax(amax, fp8_max, Power2Scaling, eps);
 }
 
 }  // namespace transformer_engine
