@@ -146,24 +146,21 @@ Float8CurrentScalingQuantizer::Float8CurrentScalingQuantizer(const py::handle& q
   const at::Tensor& scale = quantizer.attr("scale").cast<at::Tensor>();
   const at::Tensor& amax = quantizer.attr("amax").cast<at::Tensor>();
   const DType type = quantizer.attr("dtype").cast<DType>();
-  // For current scaling, need several other components:
-  // 1. with_amax_reduction: bool
-  // 2. amax_reduction_group: torch.distributed.ProcessGroup or None
-  // 3. amax_reduction_size: int
-  const bool with_amax_reduction = quantizer.attr("with_amax_reduction").cast<bool>();
-  const py::object amax_reduction_group_obj = quantizer.attr("amax_reduction_group");
-  const c10::intrusive_ptr<dist_group_type> amax_reduction_group =
-      amax_reduction_group_obj.is_none()
-          ? nullptr
-          : amax_reduction_group_obj.cast<c10::intrusive_ptr<dist_group_type>>();
-  const int amax_reduction_size = quantizer.attr("amax_reduction_size").cast<int>();
-
   this->amax = amax;
   this->scale = scale;
   this->dtype = type;
+
+  // Get amax reduction group if needed
+  const bool with_amax_reduction = quantizer.attr("with_amax_reduction").cast<bool>();
+  c10::intrusive_ptr<dist_group_type> amax_reduction_group;
+  if (with_amax_reduction) {
+    auto group = quantizer.attr("_canonicalized_amax_reduction_group")();
+    NVTE_CHECK(!group.is_none(),
+               "Float8CurrentScalingQuantizer could not canonicalize amax reduction group");
+    amax_reduction_group = group.cast<c10::intrusive_ptr<dist_group_type>>();
+  }
   this->with_amax_reduction = with_amax_reduction;
   this->amax_reduction_group = amax_reduction_group;
-  this->amax_reduction_size = amax_reduction_size;
 
   // fp8 current scaling specific quantization params
   this->force_pow_2_scales = quantizer.attr("force_pow_2_scales").cast<bool>();
@@ -260,9 +257,15 @@ std::pair<TensorWrapper, py::object> Float8CurrentScalingQuantizer::create_tenso
 
 Float8BlockQuantizer::Float8BlockQuantizer(const py::handle& quantizer) : Quantizer(quantizer) {
   this->dtype = quantizer.attr("dtype").cast<DType>();
-  this->force_pow_2_scales = quantizer.attr("force_pow_2_scales").cast<bool>();
-  this->amax_epsilon = quantizer.attr("amax_epsilon").cast<float>();
   this->block_scaling_dim = quantizer.attr("block_scaling_dim").cast<int>();
+  NVTE_CHECK(quantizer.attr("force_pow_2_scales").cast<bool>(),
+             "Pending additional parameters to the nvte_quantize API, "
+             "float8 block quantization requires pow2 scales");
+  NVTE_CHECK(quantizer.attr("amax_epsilon").cast<float>() == 0.0,
+             "Pending additional parameters to the nvte_quantize API, "
+             "float8 block quantization requires amax_epsilon==0");
+  NVTE_CHECK(this->block_scaling_dim == 1 || this->block_scaling_dim == 2,
+             "Unsupported block scaling dim.");
 }
 
 void Float8BlockQuantizer::set_quantization_params(TensorWrapper* tensor) const {
@@ -278,10 +281,6 @@ void Float8BlockQuantizer::set_quantization_params(TensorWrapper* tensor) const 
                            rowwise_data.shape);
   tensor->set_columnwise_data(columnwise_data.data_ptr, static_cast<DType>(columnwise_data.dtype),
                               columnwise_data.shape);
-
-  // Set options on TensorWrapper from quantization.
-  tensor->set_qopt_force_pow_2_scales(force_pow_2_scales);
-  tensor->set_qopt_amax_epsilon(amax_epsilon);
 }
 
 std::pair<TensorWrapper, py::object> Float8BlockQuantizer::create_tensor(

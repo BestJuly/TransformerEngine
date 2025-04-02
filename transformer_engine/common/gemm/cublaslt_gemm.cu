@@ -359,7 +359,7 @@ void cublas_gemm(const Tensor *inputA, const Tensor *inputB, Tensor *outputD,
             operationDesc, CUBLASLT_MATMUL_DESC_ALPHA_VECTOR_BATCH_STRIDE, &dummy_a_vec_stride,
             sizeof(dummy_a_vec_stride)));
       }
-#if CUDA_VERSION >= 12080 // change from 12090 to 12080 because of using internal cublas version.
+#if CUDA_VERSION >= 12090
     } else if ((inputA->scaling_mode == NVTE_BLOCK_SCALING_1D ||
                 inputA->scaling_mode == NVTE_BLOCK_SCALING_2D) &&
                (inputB->scaling_mode == NVTE_BLOCK_SCALING_1D ||
@@ -652,3 +652,11 @@ void nvte_multi_stream_cublas_gemm(const NVTETensor *A, const NVTETensor *B, NVT
     NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream, cublas_event[s]));
   }
 }
+
+namespace transformer_engine {
+
+using cublasHandleManager = detail::HandleManager<cublasLtHandle_t, CreateCublasHandle>;
+
+void nvte_cublas_handle_init() { auto _ = cublasHandleManager::Instance().GetHandle(); }
+
+}  //  namespace transformer_engine

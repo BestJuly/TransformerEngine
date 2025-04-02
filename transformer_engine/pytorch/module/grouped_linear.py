@@ -85,6 +85,15 @@ class _GroupedLinear(torch.autograd.Function):
         biases = weights_and_biases[num_gemms:]
         device = inp.device
 
+        # TODO Support MXFP8  # pylint: disable=fixme
+        if fp8 and FP8GlobalStateManager.get_fp8_recipe().mxfp8():
+            raise NotImplementedError("GroupedLinear does not yet support MXFP8")
+        # TODO Support Float8 Current Scaling  # pylint: disable=fixme
+        if fp8 and FP8GlobalStateManager.get_fp8_recipe().float8_current_scaling():
+            raise NotImplementedError("GroupedLinear does not yet support Float8 Current Scaling")
+        if fp8 and FP8GlobalStateManager.get_fp8_recipe().fp8blockwise():
+            raise NotImplementedError("GroupedLinear does not yet support Float8Blockwise scaling")
+
         # Make sure input dimensions are compatible
         in_features = weights[0].shape[-1]
         assert inp.shape[-1] == in_features, "GEMM not possible"
@@ -127,20 +136,17 @@ class _GroupedLinear(torch.autograd.Function):
             )
             weights_fp8 = []
             bias_dtype = torch.bfloat16 if activation_dtype == torch.float32 else activation_dtype
-            if not isinstance(weights[0], QuantizedTensor):
-                # FP8 cast to workspace buffer
-                update_workspace = is_first_microbatch is None or is_first_microbatch
-                for i in range(num_gemms):
-                    weight_fp8 = module.get_weight_workspace(
-                        tensor=weights[i],
-                        quantizer=weight_quantizers[i],
-                        cache_name=(None if is_first_microbatch is None else f"weight{i}"),
-                        update_workspace=update_workspace,
-                        skip_update_flag=skip_fp8_weight_update,
-                    )
-                    weights_fp8.append(weight_fp8)
-            else:
-                weights_fp8 = weights
+            # FP8 cast to workspace buffer
+            update_workspace = is_first_microbatch is None or is_first_microbatch
+            for i in range(num_gemms):
+                weight_fp8 = module.get_weight_workspace(
+                    tensor=weights[i],
+                    quantizer=weight_quantizers[i],
+                    cache_name=(None if is_first_microbatch is None else f"weight{i}"),
+                    update_workspace=update_workspace,
+                    skip_update_flag=skip_fp8_weight_update,
+                )
+                weights_fp8.append(weight_fp8)
 
         else:
             inputmats = inputmats_no_fp8

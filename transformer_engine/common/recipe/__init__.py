@@ -166,7 +166,6 @@ class DelayedScaling(Recipe):
     """
 
     margin: int = 0
-    interval: int = -1
     fp8_format: Format = Format.HYBRID
     amax_history_len: int = 1024
     amax_compute_algo: Union[Literal["max", "most_recent"], Callable] = "max"
@@ -177,12 +176,6 @@ class DelayedScaling(Recipe):
 
     def __post_init__(self) -> None:
         assert self.fp8_format != Format.E5M2, "Pure E5M2 training is not supported."
-        if self.interval >= 0:
-            warnings.warn(
-                "`interval` argument is deprecated and unused. "
-                "It will be removed in an upcoming release.",
-                DeprecationWarning,
-            )
 
     def __repr__(self) -> str:
         return (
@@ -356,9 +349,9 @@ class Float8BlockScaling(Recipe):
     """
 
     fp8_format: Format = Format.E4M3
-    fp8_quant_fwd_inp = QParams(power_2_scale=False, amax_epsilon=0.0)
-    fp8_quant_fwd_weight = QParams(power_2_scale=False, amax_epsilon=0.0)
-    fp8_quant_bwd_grad = QParams(power_2_scale=False, amax_epsilon=0.0)
+    fp8_quant_fwd_inp = QParams(power_2_scale=True, amax_epsilon=0.0)
+    fp8_quant_fwd_weight = QParams(power_2_scale=True, amax_epsilon=0.0)
+    fp8_quant_bwd_grad = QParams(power_2_scale=True, amax_epsilon=0.0)
     x_block_scaling_dim: int = 1
     w_block_scaling_dim: int = 2
     grad_block_scaling_dim: int = 1

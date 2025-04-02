@@ -57,7 +57,7 @@ def check_fp8_block_scaling_support() -> Tuple[bool, str]:
     if (
         get_device_compute_capability() >= (9, 0)
         and get_device_compute_capability() < (10, 0)
-        and float(torch.version.cuda) >= 12.8 # change from 12.9 to 12.8 because of using internal cublas version.
+        and float(torch.version.cuda) >= 12.9
     ):
         return True, ""
     return False, "FP8 block scaled GEMM requires Hopper and CUDA >= 12.9."
@@ -107,6 +107,7 @@ class FP8GlobalStateManager:
     FP8_RECIPE = None
     FP8_DISTRIBUTED_GROUP = None
     FP8_PARAMETERS = False
+    HIGH_PRECISION_INIT_VAL = False
     IS_FIRST_FP8_MODULE = False
     FP8_GRAPH_CAPTURING = False
     FP8_AUTOCAST_DEPTH = 0
@@ -133,6 +134,7 @@ class FP8GlobalStateManager:
         cls.FP8_RECIPE = None
         cls.FP8_DISTRIBUTED_GROUP = None
         cls.FP8_PARAMETERS = False
+        cls.HIGH_PRECISION_INIT_VAL = False
         cls.IS_FIRST_FP8_MODULE = False
         cls.FP8_GRAPH_CAPTURING = False
         cls.FP8_AUTOCAST_DEPTH = 0
@@ -293,6 +295,11 @@ class FP8GlobalStateManager:
     def with_fp8_parameters(cls) -> bool:
         """Should the parameters be stored as FP8"""
         return cls.FP8_PARAMETERS
+
+    @classmethod
+    def with_high_precision_init_val(cls) -> bool:
+        """Should the high precision initial values be stored with FP8 parameters"""
+        return cls.HIGH_PRECISION_INIT_VAL
 
     @classmethod
     def fp8_graph_capturing(cls) -> bool:
@@ -530,7 +537,11 @@ class FP8GlobalStateManager:
 
 
 @contextmanager
-def fp8_model_init(enabled: bool = True, recipe: Optional[Recipe] = None) -> None:
+def fp8_model_init(
+    enabled: bool = True,
+    recipe: Optional[Recipe] = None,
+    preserve_high_precision_init_val: bool = False,
+) -> None:
     """
     Context manager for FP8 initialization of parameters.
 
@@ -540,6 +551,12 @@ def fp8_model_init(enabled: bool = True, recipe: Optional[Recipe] = None) -> Non
 
         with fp8_model_init(enabled=True):
             model = transformer_engine.pytorch.Linear(768, 768)
+
+        # Preserving high precision initial value to initialize master weight
+        with fp8_model_init(enabled=True, preserve_high_precision_init_val=True):
+            model = transformer_engine.pytorch.Linear(768, 768)
+        master_weight = model.weight.get_high_precision_init_val()
+        model.weight.clear_high_precision_init_val()
 
     Parameters
     ----------
@@ -556,18 +573,29 @@ def fp8_model_init(enabled: bool = True, recipe: Optional[Recipe] = None) -> Non
              * LoRA-like fine-tuning, where the main parameters of the model do not change.
     recipe: transformer_engine.common.recipe.Recipe, default = `None`
             Recipe used to create the parameters. If left to None, it uses the default FP8 recipe.
+    preserve_high_precision_init_val: bool, default = `False`
+             when enabled, store the high precision tensor used to initialize FP8 parameters
+             in CPU memory, and add two function attributes named `get_high_precision_init_val()`
+             and `clear_high_precision_init_val()` to FP8 parameters to get/clear this high
+             precision tensor. The purpose is that users can use this high-precision copy
+             to initialize master weights, avoiding the loss of precision that can occur when
+             using FP8 parameters directly. Note that after the master weights are initialized,
+             users should call `clear_high_precision_init_val()` to release this CPU memory.
 
              This functionality is *EXPERIMENTAL*.
     """
     _fp8_parameters = FP8GlobalStateManager.FP8_PARAMETERS
     _fp8_recipe = FP8GlobalStateManager.FP8_RECIPE
+    _high_precision_init_val = FP8GlobalStateManager.HIGH_PRECISION_INIT_VAL
     FP8GlobalStateManager.FP8_PARAMETERS = enabled
     FP8GlobalStateManager.FP8_RECIPE = get_default_fp8_recipe() if recipe is None else recipe
+    FP8GlobalStateManager.HIGH_PRECISION_INIT_VAL = preserve_high_precision_init_val
     try:
         yield
     finally:
         FP8GlobalStateManager.FP8_PARAMETERS = _fp8_parameters
         FP8GlobalStateManager.FP8_RECIPE = _fp8_recipe
+        FP8GlobalStateManager.HIGH_PRECISION_INIT_VAL = _high_precision_init_val
 
 
 @contextmanager
@@ -976,6 +1004,7 @@ class Float8BlockScalingRecipeState(RecipeState):
             # is somewhat awkward, and doesn't play nicely with QuantizeOp,
             # which is not associated with a GEMM.
             assert self.num_quantizers % 3 == 0  # x, w, output per gemm
+<<<<<<< HEAD
             return list(itertools.chain.from_iterable([[
                 Float8BlockQuantizer(
                     fp8_dtype=self.qx_dtype,
@@ -1023,3 +1052,66 @@ class Float8BlockScalingRecipeState(RecipeState):
                 block_scaling_dim=self.recipe.grad_block_scaling_dim,
             ),
         ] for _ in range(self.num_quantizers // 2)]))
+=======
+            return list(
+                itertools.chain.from_iterable(
+                    [
+                        [
+                            Float8BlockQuantizer(
+                                fp8_dtype=self.qx_dtype,
+                                rowwise=True,
+                                columnwise=True,
+                                amax_epsilon=self.recipe.fp8_quant_fwd_inp.amax_epsilon,
+                                force_pow_2_scales=self.recipe.fp8_quant_fwd_inp.power_2_scale,
+                                block_scaling_dim=self.recipe.x_block_scaling_dim,
+                            ),
+                            Float8BlockQuantizer(
+                                fp8_dtype=self.qx_dtype,
+                                rowwise=True,
+                                columnwise=True,
+                                amax_epsilon=self.recipe.fp8_quant_fwd_weight.amax_epsilon,
+                                force_pow_2_scales=self.recipe.fp8_quant_fwd_weight.power_2_scale,
+                                block_scaling_dim=self.recipe.w_block_scaling_dim,
+                            ),
+                            Float8BlockQuantizer(
+                                fp8_dtype=self.qx_dtype,
+                                rowwise=True,
+                                columnwise=True,
+                                amax_epsilon=self.recipe.fp8_quant_fwd_inp.amax_epsilon,
+                                force_pow_2_scales=self.recipe.fp8_quant_fwd_inp.power_2_scale,
+                                block_scaling_dim=self.recipe.x_block_scaling_dim,
+                            ),
+                        ]
+                        for _ in range(self.num_quantizers // 3)
+                    ]
+                )
+            )
+
+        assert self.mode == "backward", f"Unexpected mode {self.mode}"
+        assert self.num_quantizers % 2 == 0  # grad_output and grad_input per gemm
+        return list(
+            itertools.chain.from_iterable(
+                [
+                    [
+                        Float8BlockQuantizer(
+                            fp8_dtype=self.qgrad_dtype,
+                            rowwise=True,
+                            columnwise=True,
+                            amax_epsilon=self.recipe.fp8_quant_bwd_grad.amax_epsilon,
+                            force_pow_2_scales=self.recipe.fp8_quant_bwd_grad.power_2_scale,
+                            block_scaling_dim=self.recipe.grad_block_scaling_dim,
+                        ),
+                        Float8BlockQuantizer(
+                            fp8_dtype=self.qgrad_dtype,
+                            rowwise=True,
+                            columnwise=True,
+                            amax_epsilon=self.recipe.fp8_quant_bwd_grad.amax_epsilon,
+                            force_pow_2_scales=self.recipe.fp8_quant_bwd_grad.power_2_scale,
+                            block_scaling_dim=self.recipe.grad_block_scaling_dim,
+                        ),
+                    ]
+                    for _ in range(self.num_quantizers // 2)
+                ]
+            )
+        )
+>>>>>>> pr/1559

@@ -40,7 +40,7 @@ class Float8BlockQuantizer(Quantizer):
         rowwise: bool,
         columnwise: bool,
         amax_epsilon: float = 0.0,
-        force_pow_2_scales: bool = False,
+        force_pow_2_scales: bool = True,
         block_scaling_dim: int = 2,
     ) -> None:
         super().__init__(rowwise=rowwise, columnwise=columnwise)
@@ -301,11 +301,17 @@ class Float8BlockwiseQTensor(Float8BlockwiseQTensorBase, QuantizedTensor):
         # pylint: disable=missing-function-docstring
         return Float8BlockwiseQTensor.make_like(self)
 
-    def update_usage(self, rowwise_usage=True, columnwise_usage=True):
+    def update_usage(
+        self, rowwise_usage: Optional[bool] = None, columnwise_usage: Optional[bool] = None
+    ):
         """
         update_usage can be used to clear out one of two possible copies of the data.
         """
 
+        if rowwise_usage is None:
+            rowwise_usage = self._rowwise_data is not None
+        if columnwise_usage is None:
+            columnwise_usage = self._columnwise_data is not None
         assert (
             columnwise_usage or rowwise_usage
         ), "Must retain some data either columnwise or rowwise"
@@ -359,13 +365,13 @@ class Float8BlockwiseQTensor(Float8BlockwiseQTensorBase, QuantizedTensor):
             # because of __torch_function__ in base class
             # and torch._C._disabled_torch_function_impl
             return _ViewFunc.forward(None, self, shape)
-        return super.view(self, *shape)
+        return super().view(self, *shape)
 
     def reshape(self, *shape: Tuple[int]) -> Float8BlockwiseQTensor:
         # pylint: disable=missing-function-docstring
         if not self.requires_grad:
             return _ReshapeFunc.forward(None, self, shape)
-        return super.reshape(self, *shape)
+        return super().reshape(self, *shape)
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args, kwargs=None):
@@ -477,10 +483,13 @@ class Float8BlockwiseQTensor(Float8BlockwiseQTensorBase, QuantizedTensor):
                 dst.requires_grad_(requires_grad=src.requires_grad)
 
         # Just copy FP8 data if other tensor is Float8BlockwiseQTensor
-        if (
+        compatible_layout = (
             isinstance(tensor, Float8BlockwiseQTensor)
             and self.size() == tensor.size()
             and self.stride() == tensor.stride()
+        )
+        if (
+            compatible_layout
             and self.storage_offset() == tensor.storage_offset()
             and self.dtype == tensor.dtype
             and self.layout == tensor.layout
@@ -488,7 +497,7 @@ class Float8BlockwiseQTensor(Float8BlockwiseQTensorBase, QuantizedTensor):
         ):
             _set_from_tensor(self, tensor)
             return
-        elif isinstance(tensor, Float8BlockwiseQTensor):
+        if isinstance(tensor, Float8BlockwiseQTensor):
             assert tensor._quantizer is not None, "Can't quantize without a quantizer"
             quantizer = tensor._quantizer
         else:
@@ -555,7 +564,6 @@ class _ReshapeFunc(torch.autograd.Function):
         # pylint: disable=missing-function-docstring
 
         # Return input tensor if shape is not provided
-        shape_arg = shape
         if ctx is not None:
             ctx.shape = tensor.shape
         if shape is None:
